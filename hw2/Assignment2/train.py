@@ -108,14 +108,15 @@ def main():
     model.train()
 
     # start training loop here
-    for it in trange(cur_iter, config.max_iter):
+    for count,it in enumerate(trange(cur_iter, config.max_iter)):
         optimizer.zero_grad()
         data = train_loader.get()
         data = {k: v.to(device) for k, v in data.items()}
         # calls model.forward here
         loss, result_dict = model(**data)
         loss.backward()
-        print("loss", loss.item())
+        if count%200==0:
+            print("loss", loss.item())
         optimizer.step()
         scheduler.step()
 
