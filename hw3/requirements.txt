@@ -1,0 +1,7 @@
+numpy # numpy>2.0.0
+scipy
+playground==0.0.4
+jax[cuda12]
+matplotlib
+mediapy
+
