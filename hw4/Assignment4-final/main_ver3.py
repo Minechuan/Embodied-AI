@@ -1,28 +1,29 @@
 import argparse
 from typing import Optional, Tuple, List
 import numpy as np
-import cv2
+import cv2,torch
 from pyapriltags import Detector
+from scipy.spatial.transform import Rotation as R
+
+from src.vis import Vis
 from src.type import Grasp
 from src.utils import to_pose, rot_dist
 from src.sim.wrapper_env import WrapperEnvConfig, WrapperEnv
 from src.sim.wrapper_env import get_grasps
 from src.test.load_test import load_test_data
-from scipy.spatial.transform import Rotation as R, Slerp
 from src.robot.cfg import get_robot_cfg
 
-
-
-from src.utils import get_pc_from_rgbd, preprocess_pc_for_model
+# predict mask
+from src.utils import get_workspace_mask_pose
+from src.utils import get_pc_from_rgbd
 from src.model.est_pose import EstPoseNet
 from src.model.est_coord import EstCoordNet
 from src.config import Config
-from transforms3d.quaternions import mat2quat, quat2mat
-from src.utils import get_workspace_mask_pose
-import torch
-from src.constants import DEPTH_IMG_SCALE
+
+
+
 import traceback
-from src.vis import Vis
+
 
 
 
@@ -377,7 +378,7 @@ def execute_plan(env, gra_plan: np.ndarray,obj_pose,plan_type:int) -> bool:
                     humanoid_action=qpos[:7], 
 
                 )
-            qpos = env.get_states()
+            qpos = env.get_state()
         open_gripper(env)
     elif plan_type ==3: # here gra_plan is [,7]
         '''特定针对只有没有中间过程的规划'''
@@ -684,7 +685,7 @@ def main():
         # implement your moving plan
         # current_gripper_trans, current_gripper_rot = env.humanoid_robot_model.fk_link(env.sim.mj_data.qpos[env.sim.qpos_humanoid_begin:env.sim.qpos_humanoid_begin+7], env.humanoid_robot_cfg.link_eef) # 正向运动学获取末端执行器位姿
 
-        qpos = env.get_states()
+        qpos = env.get_state()
         print(f" humanoid arm qpos is {qpos}.")
 
         # move_plan=np.array([ 0.9371,-1.5984 ,-1.4545, -0.5024, -0.0948, -0.2711,  0.8]) # 这是一个可行的 qpos，但是路径最后夹爪的角度不合适
