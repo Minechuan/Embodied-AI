@@ -135,22 +135,22 @@ class WrapperEnv:
 
     def get_obs(self, camera_id: int = 1) -> Obs:
         """Get the observation from the simulation, camera_id = 0 for head camera, camera_id = 1 for wrist camera."""
-        init_qpos = self.humanoid_robot_cfg.joint_init_qpos.copy()
+        qpos = self.get_state()
         if camera_id == 1:
-            cam_trans, cam_rot = self.humanoid_robot_model.fk_camera(init_qpos, camera_id)
+            cam_trans, cam_rot = self.humanoid_robot_model.fk_camera(qpos, camera_id)
         elif camera_id == 0:
             cam_trans, cam_rot = self.humanoid_robot_model.fk_camera(self.sim.humanoid_head_qpos, camera_id)
         else:
             raise NotImplementedError
         
         cam_pose = to_pose(cam_trans, cam_rot)
-        render_cfg = MjRenderConfig.from_intrinsics_extrinsics(
-            self.humanoid_robot_cfg.camera_cfg[camera_id].height,
-            self.humanoid_robot_cfg.camera_cfg[camera_id].width,
-            self.humanoid_robot_cfg.camera_cfg[camera_id].intrinsics,
-            cam_pose.copy(),
-        )
-        x = self.sim.render(render_cfg)
+        # render_cfg = MjRenderConfig.from_intrinsics_extrinsics(
+        #     self.humanoid_robot_cfg.camera_cfg[camera_id].height,
+        #     self.humanoid_robot_cfg.camera_cfg[camera_id].width,
+        #     self.humanoid_robot_cfg.camera_cfg[camera_id].intrinsics,
+        #     cam_pose.copy(),
+        # )
+        x = self.sim.render(camera_id=camera_id, camera_pose=cam_pose)
 
         obs = Obs(
             rgb=x["rgb"],
@@ -161,7 +161,7 @@ class WrapperEnv:
         return obs
     
     def get_state(self) -> Dict:
-        humanoid_qpos = self.sim.mj_data.qpos[self.sim.humanoid_actuator_ids]
+        humanoid_qpos = self.sim.mj_data.qpos[self.sim.humanoid_joint_ids]
         return humanoid_qpos
 
     def step_env(
@@ -268,6 +268,7 @@ class WrapperEnv:
         dist_diff = np.linalg.norm(driller_pose[:3, 3] - obj_pose[:3, 3])
         rot_diff = driller_pose[:3, :3] @ obj_pose[:3, :3].T
         angle_diff = np.abs(np.arccos(np.clip((np.trace(rot_diff) - 1) / 2, -1, 1)))
+        print(f"dist_diff: {dist_diff}, angle_diff: {angle_diff}")
         if dist_diff < 0.025 and angle_diff < 0.25:
             return True
         return False
@@ -300,7 +301,7 @@ class WrapperEnv:
         container_trans = container_pose[:3, 3].copy()
         init_quad_trans = self._init_container_pose[:3, 3].copy()
         dist_xy = np.linalg.norm(container_trans[:2] - init_quad_trans[:2])
-
+        print(f"Now distance is {dist_xy}, now xyz is {container_trans}, goal xyz is {init_quad_trans}.")
         if dist_xy < 0.1:
             return True
         return False

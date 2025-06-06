@@ -320,6 +320,7 @@ class Vis:
     def show(
         plotly_list: list,
         path: Optional[str] = None,
+        silent: bool = False,
     ) -> None:
         """
         Show the plotly objects or save them to a html file
@@ -331,6 +332,7 @@ class Vis:
         path: Optional[str]
             The path to save the html file, if None, show in the browser
         """
+        # return
         fig = go.Figure(
             data=plotly_list, layout=go.Layout(scene=dict(aspectmode="data"))
         )

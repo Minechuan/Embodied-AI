@@ -192,7 +192,7 @@ class RobotModel:
         rot: np.ndarray,
         init_qpos: Optional[np.ndarray] = None,
         retry_times: int = 10,
-        trans_tol=1e-3,
+        trans_tol=1e-2,
         rot_tol=1e-2,
         delta_thresh: float = None,
     ) -> Tuple[bool, np.ndarray]:

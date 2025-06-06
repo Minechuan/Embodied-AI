@@ -3,29 +3,31 @@ import numpy as np
 import cv2
 from pyapriltags import Detector
 import os
-from src.utils import to_pose
+from src.utils import to_pose, rot_dist
 from src.sim.wrapper_env import WrapperEnvConfig, WrapperEnv
 
 from scipy.spatial.transform import Rotation as R
 
 def from_dog_frame_to_world(dog_pose, obj_local):
     """
-    将物体在狗坐标系下的7D位姿转换到世界坐标系。
-    dog_pose和obj_local均为7D格式：[x,y,z, qx,qy,qz,qw]
+    将物体在dog坐标系下的7D位姿转换到世界坐标系。
+    dog_pose 和 obj_local 均为7D格式：[x, y, z, qx, qy, qz, qw]
     """
+    # 位置与四元数提取
     p_dog = dog_pose[:3]
-    q_dog = dog_pose[3:]  # [x,y,z,w]
+    q_dog = dog_pose[3:]
     p_obj_local = obj_local[:3]
-    q_obj_local = obj_local[3:]  # [x,y,z,w]
+    q_obj_local = obj_local[3:]
+
+    # dog 坐标系旋转矩阵
     r_dog = R.from_quat(q_dog)
-    r_obj_local = R.from_quat(q_obj_local)
 
-    # 位置变换：将obj_local的位置旋转到世界坐标系，再加上狗的位置
-    p_world = p_dog + r_dog.apply(p_obj_local)
+    # 变换位置：先旋转，再平移
+    p_world = r_dog.apply(p_obj_local) + p_dog
 
-    # 姿态变换：世界坐标系下的旋转 = 狗的旋转 * 物体在狗坐标系的旋转
-    r_world = r_dog * r_obj_local
-    q_world = r_world.as_quat()  # [x,y,z,w]
+    # 变换朝向：四元数相乘（dog 的旋转乘以物体在 dog 下的旋转）
+    q_world = (r_dog * R.from_quat(q_obj_local)).as_quat()
+
     return np.concatenate([p_world, q_world])
 
 

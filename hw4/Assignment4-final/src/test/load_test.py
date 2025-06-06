@@ -33,7 +33,7 @@ EXAMPLE_TEST_DATA = [
         table_size = np.array([0.68, 0.36, 0.02]),
         obj_trans = np.array([0.5, 0.4, 0.82]),
         obj_quat = np.array([0.924, 0.0, 0.0, -0.383]),
-        quad_reset_pos = np.array([1.9, -0.15, 0.278])
+        quad_reset_pos = np.array([1.9, -0.15, 0.278]) # [0.5, 0.4, 0.82 0.924, 0.0, 0.0, -0.383]
     ),
 
     TestData(
