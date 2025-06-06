@@ -3,7 +3,6 @@ from typing import Optional, Tuple, List
 import numpy as np
 import cv2
 from pyapriltags import Detector
-
 from src.type import Grasp
 from src.utils import to_pose, rot_dist
 from src.sim.wrapper_env import WrapperEnvConfig, WrapperEnv
@@ -12,11 +11,19 @@ from src.test.load_test import load_test_data
 from scipy.spatial.transform import Rotation as R, Slerp
 from src.robot.cfg import get_robot_cfg
 
-'''
-目前遇到的问题
-1. 原来的限制下是不会绕大圈的，因为佳伦添加了角度约束
-但是预测后（尤其是针对 test 3），在预测时有些微的误差，所以 move and drop 的时候会提前掉落。
-'''
+
+
+from src.utils import get_pc_from_rgbd, preprocess_pc_for_model
+from src.model.est_pose import EstPoseNet
+from src.model.est_coord import EstCoordNet
+from src.config import Config
+from transforms3d.quaternions import mat2quat, quat2mat
+from src.utils import get_workspace_mask_pose
+import torch
+from src.constants import DEPTH_IMG_SCALE
+import traceback
+from src.vis import Vis
+
 
 
 
@@ -36,26 +43,11 @@ FLAG_COME_TURN = False # [0,0,0 ,1] to [-0.7071,0.,0.,0.7071], 到达阈值后�
 dog_ready = False
 FLAG_GO_TURN = False 
 TURN_OVER = False
-turn_rot = np.array([ # 绕 z 轴顺时针旋转 90 度
-        [0, 0, 1],
-        [0, 1,0 ],
-        [-1, 0, 0]
-        ])
 turn_quat = 0.,0.,0.707,0.707
 quad_move_traj = [] # store all the quad_command to reverse and roll out
-
 '''Pose detection'''
 # For pose detection
-from src.utils import get_pc_from_rgbd, preprocess_pc_for_model
-from src.model.est_pose import EstPoseNet
-from src.model.est_coord import EstCoordNet
-from src.config import Config
-from transforms3d.quaternions import mat2quat, quat2mat
-from src.utils import to_pose,rot_dist,get_pc,get_workspace_mask,get_workspace_mask_pose
-import torch,cv2
-from src.constants import DEPTH_IMG_SCALE
-import traceback
-from src.vis import Vis
+
 
 COORD_MODEL_DIR = "./models/est_coord/checkpoint_21500.pth"
 POSE_MODEL_DIR = "./models/est_pose/checkpoint_5500.pth"
@@ -142,8 +134,7 @@ def detect_driller_pose(img, depth, camera_matrix, camera_pose, table_pose,*args
         pc_camera = full_pc_camera[pc_mask][sel_pc_idx]
         pc_tensor = torch.from_numpy(pc_camera).float().unsqueeze(0).to(DEVICE)
         print(f"pc_tensor shape: {pc_tensor.shape}")
-        # show_point_cloud(pc_camera)
-        # pc_mask = np.ones(full_pc_world.shape[0], dtype=bool)
+
         
         # Try EstCoordNet first (usually better performance)
         if COORD_MODEL is not None:
@@ -153,8 +144,6 @@ def detect_driller_pose(img, depth, camera_matrix, camera_pose, table_pose,*args
                 est_rot = est_rot.cpu().numpy().squeeze()
                 
                 # Convert from camera frame to world frame
-                # print(f"camera_pose: {camera_pose}")
-                # print(f"est_rot: {est_rot}")
                 world_trans = camera_pose[:3, :3] @ est_trans + camera_pose[:3, 3]
                 world_rot = camera_pose[:3, :3] @ est_rot
                 
@@ -264,6 +253,17 @@ def is_desired_qpos_for_post_grasp(qpos_arr: np.ndarray) -> bool:
 
     return cond1 and cond2 and cond3 and cond6 and cond7
 
+def is_desired_qpos_for_post_grasp1(qpos_arr: np.ndarray) -> bool:
+    # ... (维度检查不变)
+
+    
+    cond1 = (qpos_arr[0] >= -1.0) and (qpos_arr[0] <= -0.2)
+    cond3 = (qpos_arr[2] >= -0.5) and (qpos_arr[2] <= 0.5)
+    cond2 = (qpos_arr[1] >= -1.2) and (qpos_arr[2] <= 0.8) # cond2 保持不变
+    cond6 = (qpos_arr[5] >= -0.5) and (qpos_arr[5] <= 0.5) # cond6 保持不变
+    cond7 = qpos_arr[6] < 0                               # cond7 保持不变
+
+    return cond1 and cond2 and cond3 and cond6 and cond7
 def plan_grasp(env: WrapperEnv, grasp: Grasp, grasp_config, *args, **kwargs) -> Optional[List[np.ndarray]]:
     """Try to plan a grasp trajectory for the given grasp. The trajectory is a list of joint positions. Return None if the trajectory is not valid."""
     robot_cfg = get_robot_cfg("galbot")
@@ -295,7 +295,7 @@ def plan_grasp(env: WrapperEnv, grasp: Grasp, grasp_config, *args, **kwargs) -> 
 
     '''对轨迹的加强'''
     final_grasp_qpos = traj[-1] # check final qpos
-    if not is_desired_qpos_for_post_grasp(final_grasp_qpos):
+    if not is_desired_qpos_for_post_grasp1(final_grasp_qpos):
         print(f"The grasp plan is not good: because a loop is included!")
         return None # 返回 None，指示这个轨迹不合格 """
     
@@ -336,7 +336,7 @@ def execute_plan(env, gra_plan: np.ndarray,obj_pose,plan_type:int) -> bool:
                 humanoid_action=gra_plan[0][:7], 
             )
             p_xyz=env.humanoid_robot_model.fk_link(gra_plan[0],env.humanoid_robot_cfg.link_eef)[0]
-            c_xyz = env.humanoid_robot_model.fk_link(env.sim.mj_data.qpos[env.sim.qpos_humanoid_begin:env.sim.qpos_humanoid_begin+7],env.humanoid_robot_cfg.link_eef)[0]
+            c_xyz = env.humanoid_robot_model.fk_link(env.get_state(),env.humanoid_robot_cfg.link_eef)[0]
             dist = np.linalg.norm(p_xyz - c_xyz)
             if abs(p_xyz[0]-c_xyz[0])<0.01 and abs(p_xyz[1]-c_xyz[1])<0.01 and abs(p_xyz[2]-c_xyz[2])<0.01:
                 initial_ok = True
@@ -349,7 +349,7 @@ def execute_plan(env, gra_plan: np.ndarray,obj_pose,plan_type:int) -> bool:
                 )
         # gripper close
         close_gripper(env)
-        qpos = env.sim.mj_data.qpos[env.sim.qpos_humanoid_begin:env.sim.qpos_humanoid_begin+7]
+        qpos = env.get_state()
         print(f" grasp arm qpos is {qpos}.")
         # lift
         gra_plan.reverse()
@@ -377,10 +377,7 @@ def execute_plan(env, gra_plan: np.ndarray,obj_pose,plan_type:int) -> bool:
                     humanoid_action=qpos[:7], 
 
                 )
-            qpos = env.sim.mj_data.qpos[env.sim.qpos_humanoid_begin:env.sim.qpos_humanoid_begin+7]
-            # print(f"Current humanoid arm qpos is {qpos}.")
-            current_gripper_trans, current_gripper_rot = env.humanoid_robot_model.fk_link(qpos, env.humanoid_robot_cfg.link_eef) # 正向运动学获取末端执行器位姿
-            # print("Current end effector is :",current_gripper_trans)
+            qpos = env.get_states()
         open_gripper(env)
     elif plan_type ==3: # here gra_plan is [,7]
         '''特定针对只有没有中间过程的规划'''
@@ -413,9 +410,9 @@ def main():
     parser.add_argument("--robot", type=str, default="galbot")
     parser.add_argument("--obj", type=str, default="power_drill")
     parser.add_argument("--ctrl_dt", type=float, default=0.02)
-    parser.add_argument("--headless", type=int, default=1) # 暂时不显式
+    parser.add_argument("--headless", type=int, default=0) # 暂时不显式
     parser.add_argument("--reset_wait_steps", type=int, default=100)
-    parser.add_argument("--test_id", type=int, default=0)
+    parser.add_argument("--test_id", type=int, default=2)
     parser.add_argument("--try_plan_num", type=int, default=3) # for each grasp, find ik
 
     args = parser.parse_args()
@@ -633,8 +630,11 @@ def main():
     if not DISABLE_GRASP:
         print("*"*80,"\nStage 3: grasp and lift task begin")
         # 预先设置：
+        print("The driller pose is ", driller_pose)
+        print("The driller pose is ", T_to_pose7d(driller_pose))
         obj_pose = driller_pose.copy()
-        obj_pose = env.get_driller_pose()
+        # obj_pose1 = env.get_driller_pose()
+
         print(f"Object pose is {T_to_pose7d(obj_pose)}!")
         grasps = get_grasps(args.obj)  # 得到了 8 个 grasp
 
@@ -644,7 +644,7 @@ def main():
         # grasps[0] 应该是可以成功的
         est_trans = obj_pose[:3,3]
         est_rot = obj_pose[:3,:3]
-
+        est_trans[2] -= 0.05 # 让它更低一点，夹得更稳
         grasp_config = dict( 
             reach_steps=20,
             delta_dist=0.01
@@ -684,7 +684,7 @@ def main():
         # implement your moving plan
         # current_gripper_trans, current_gripper_rot = env.humanoid_robot_model.fk_link(env.sim.mj_data.qpos[env.sim.qpos_humanoid_begin:env.sim.qpos_humanoid_begin+7], env.humanoid_robot_cfg.link_eef) # 正向运动学获取末端执行器位姿
 
-        qpos = env.sim.mj_data.qpos[env.sim.qpos_humanoid_begin:env.sim.qpos_humanoid_begin+7]
+        qpos = env.get_states()
         print(f" humanoid arm qpos is {qpos}.")
 
         # move_plan=np.array([ 0.9371,-1.5984 ,-1.4545, -0.5024, -0.0948, -0.2711,  0.8]) # 这是一个可行的 qpos，但是路径最后夹爪的角度不合适
@@ -696,7 +696,7 @@ def main():
             [ -0.6, -1.5842,  -0.7, -1.4229, -0.9842, -0.2657, -0.5892],
         ])
 
-        def interpolate_joint_trajectory(traj, num_interp=5):
+        def interpolate_joint_trajectory(traj, num_interp=10):
             """
             对机械臂的关节角度序列进行线性插值，每对相邻帧之间插入若干中间帧。
             """
@@ -783,16 +783,6 @@ def main():
                 rot_container_world = rot_marker_world
                 pose_container_world = to_pose(trans_container_world, rot_container_world)
                 container_7dim = T_to_pose7d(pose_container_world)
-
-                # if not rot_align: # 还没有对齐旋转，需要对齐旋转
-                #     # 这里需要根据方向调整
-                #     rot_dist = rot_dist(final_rot,pose_container_world[:3,:3])
-                #     if  rot_dist > 0.10:
-                #         quad_command = [0,0,0.5]
-                #     else:
-                #         TURN_OVER = True
-                #         quad_command = [0,0,0]
-                #         print("Turn over!")
 
 
                 dist_x= np.linalg.norm(container_7dim[0]-quad_initial_pose[0,3])
