@@ -5,26 +5,30 @@ import cv2,torch
 from pyapriltags import Detector
 from scipy.spatial.transform import Rotation as R
 
+
+
+
 from src.vis import Vis
 from src.type import Grasp
 from src.utils import to_pose, rot_dist
-from src.sim.wrapper_env import WrapperEnvConfig, WrapperEnv
-from src.sim.wrapper_env import get_grasps
 from src.test.load_test import load_test_data
 from src.robot.cfg import get_robot_cfg
 
 # predict mask
-from src.utils import get_workspace_mask_pose
+from src.utils import get_workspace_mask_height
 from src.utils import get_pc_from_rgbd
 from src.model.est_pose import EstPoseNet
 from src.model.est_coord import EstCoordNet
 from src.config import Config
 
-
-
 import traceback
 
-
+if False:
+    from src.real.wrapper_env import WrapperEnvConfig, WrapperEnv
+    from src.real.wrapper_env import get_grasps
+else:
+    from src.sim.wrapper_env import WrapperEnvConfig, WrapperEnv
+    from src.sim.wrapper_env import get_grasps
 
 
 
@@ -51,7 +55,7 @@ quad_move_traj = [] # store all the quad_command to reverse and roll out
 
 
 COORD_MODEL_DIR = "./models/est_coord/checkpoint_21500.pth"
-POSE_MODEL_DIR = "./models/est_pose/checkpoint_5500.pth"
+POSE_MODEL_DIR = "./models/est_pose/checkpoint_24000.pth"
 POSE_MODEL = None
 COORD_MODEL = None
 DEVICE = None
@@ -93,7 +97,7 @@ def load_models():
         COORD_MODEL = None
 
 
-def detect_driller_pose(img, depth, camera_matrix, camera_pose, table_pose,*args, **kwargs):
+def detect_driller_pose(img, depth, camera_matrix, camera_pose, *args, **kwargs):
     """
     Detects the pose of driller, you can include your policy in args
     """
@@ -119,7 +123,7 @@ def detect_driller_pose(img, depth, camera_matrix, camera_pose, table_pose,*args
             + camera_pose[:3, 3]
         )
 
-        pc_mask = get_workspace_mask_pose(full_pc_world, table_pose)
+        pc_mask = get_workspace_mask_height(full_pc_world)
         # pc_mask = np.ones(full_pc_world.shape[0], dtype=bool)
         
         sel_pc_idx = np.random.randint(0, np.sum(pc_mask), 1024)
@@ -317,18 +321,17 @@ def plan_move_qpos(begin_qpos, end_qpos, steps=50) -> np.ndarray:
 def open_gripper(env: WrapperEnv, steps = 30):
     for _ in range(steps):
         env.step_env(gripper_open=1)
+
 def close_gripper(env: WrapperEnv, steps = 30):
     for _ in range(steps):
         env.step_env(gripper_open=0)
-
 
 def execute_plan(env, gra_plan: np.ndarray,obj_pose,plan_type:int) -> bool:
     """Execute the planned trajectory in the simulation and check if the grasp was successful."""
     if plan_type == 1: 
         '''特定针对抓取的执行方式，包括返回抓取的起点'''
         open_gripper(env)
-        succ_height_thresh = 0.18
-        obj_init_z = obj_pose[2,3]
+        # succ_height_thresh = 0.18
         # grasp
         initial_ok = False
         dist = 0
@@ -363,13 +366,7 @@ def execute_plan(env, gra_plan: np.ndarray,obj_pose,plan_type:int) -> bool:
             env.step_env(
                     humanoid_action=gra_plan[-1][:7], 
                 )
-
-        obj_final_z = env.get_driller_pose()[2,3]
-        if obj_final_z - obj_init_z > succ_height_thresh:
             return True
-        else:
-            print(f"Execute false, because the height is smaller than {succ_height_thresh} m!")
-            return False
     elif plan_type == 2:# move and drop, grasp_plan is plan for move, lift_plan is None
         '''使用较少的步数'''
         for qpos in gra_plan: 
@@ -392,6 +389,7 @@ def execute_plan(env, gra_plan: np.ndarray,obj_pose,plan_type:int) -> bool:
             env.step_env(
                     humanoid_action=gra_plan, 
                 )
+
 def execute_plan_for_pose(env: WrapperEnv, plan):
     """Execute the plan in the environment."""
     for step in range(len(plan)):
@@ -399,7 +397,7 @@ def execute_plan_for_pose(env: WrapperEnv, plan):
             humanoid_action=plan[step],
         )
 
-TESTING = True
+TESTING = False
 DISABLE_GRASP = False
 DISABLE_MOVE = False # if false, Dog can come near to the robot
 DISABLE_RETURN = True
@@ -411,7 +409,7 @@ def main():
     parser.add_argument("--robot", type=str, default="galbot")
     parser.add_argument("--obj", type=str, default="power_drill")
     parser.add_argument("--ctrl_dt", type=float, default=0.02)
-    parser.add_argument("--headless", type=int, default=0) # 暂时不显式
+    parser.add_argument("--headless", type=int, default=1) # 暂时不显式
     parser.add_argument("--reset_wait_steps", type=int, default=100)
     parser.add_argument("--test_id", type=int, default=2)
     parser.add_argument("--try_plan_num", type=int, default=3) # for each grasp, find ik
@@ -464,7 +462,7 @@ def main():
 
     # observing_qpos = humanoid_init_qpos + np.array([0.01,0,0.40,0,0,0,0.15])
     # 移动手腕并拍照
-    observing_qpos = humanoid_init_qpos + np.array([0.01,0,0.25,0,0,0,0.15]) # you can customize observing qpos to get wrist obs
+    observing_qpos = humanoid_init_qpos + np.array([0.01,0,0.20,0,0,0,0.15]) # you can customize observing qpos to get wrist obs
 
     grasp_init_qpos = humanoid_init_qpos + np.array([0.01,0,0.15,0,0,0,0.15])
     init_plan = plan_move_qpos(humanoid_init_qpos, observing_qpos)
@@ -488,9 +486,6 @@ def main():
         print("*"*80,"\nStage 1: move dog near the robot.")
         global dog_ready,FLAG_COME_TURN,TURN_OVER,THR1
 
-
-  
-             
         align_y = False
         align_over = False
         count_y = 0
@@ -604,16 +599,61 @@ def main():
     '''盲走一段路，让箱子更加靠近'''
 
     if not DISABLE_MOVE:  
-        def fine_get_closer():
-            for i in range(45):
-                quad_command=[-0.2,0,0]
+
+
+        env.step_env(humanoid_head_qpos=[-0.05,0.366])
+        ft_steps = 30
+        ft_con_xyz = 0
+        
+        def get_con_pose():
+            obs_head = env.get_obs(camera_id=0) # head camera
+            env.debug_save_obs(obs_head, 'data/obs_head') # obs has rgb, depth, and camera pose
+            trans_marker_world, rot_marker_world = detect_marker_pose(
+                detector, 
+                obs_head.rgb, 
+                head_camera_params,
+                obs_head.camera_pose,
+                tag_size=0.12
+            )
+            if trans_marker_world is not None: # in the world 
+                # the container's pose is given by follows:
+                trans_container_world = rot_marker_world @ np.array([0.31,0.,0.02]) + trans_marker_world
+                rot_container_world = rot_marker_world
+                ret = to_pose(trans_container_world, rot_container_world)
+                return ret
+            
+            else:
+                return None
+
+
+        def fine_get_closer(ft_con_xyz):
+            for i in range(ft_steps):
+
+                if i%3==0:
+                    xyz = get_con_pose()
+                    if xyz is not None:
+                        ft_con_xyz = xyz[:3,3]
+                    else:
+                        print("lose track when fine tuning, stop fine-tuning!!")
+                        return ft_con_xyz
+                    if ft_con_xyz[1] > -0.10: # 如果 y 足够近, 停止微调
+                        return ft_con_xyz
+
+                quad_command=[-0.1,0,0]
                 quad_move_traj.append(quad_command)
                 env.step_env(quad_command=quad_command)
-            env.step_env(quad_command=[0,0,0])  
-        
-        fine_get_closer()
-        assert(pose_container_world is not None)
+            return ft_con_xyz
 
+                 
+        
+        ft_con_xyz = fine_get_closer(ft_con_xyz)
+        env.step_env(quad_command=[0,0,0]) 
+        print(f"After fin-tuning container pose is {ft_con_xyz}")
+
+
+        
+
+    
 
     # --------------------------------------step 2: detect driller pose------------------------------------------------------
     if not DISABLE_GRASP:
@@ -622,8 +662,10 @@ def main():
 
         rgb, depth, camera_pose = pred_wrist_obs.rgb, pred_wrist_obs.depth, pred_wrist_obs.camera_pose
         wrist_camera_matrix = env.sim.humanoid_robot_cfg.camera_cfg[1].intrinsics
-        table_pose = env.config.table_pose
-        driller_pose = detect_driller_pose(rgb, depth, wrist_camera_matrix, camera_pose,table_pose)
+        # table_pose = env.config.table_pose
+
+
+        driller_pose = detect_driller_pose(rgb, depth, wrist_camera_matrix, camera_pose)
         # metric judgement
         Metric['obj_pose'] = env.metric_obj_pose(driller_pose)
 
@@ -631,7 +673,6 @@ def main():
     if not DISABLE_GRASP:
         print("*"*80,"\nStage 3: grasp and lift task begin")
         # 预先设置：
-        print("The driller pose is ", driller_pose)
         print("The driller pose is ", T_to_pose7d(driller_pose))
         obj_pose = driller_pose.copy()
         # obj_pose1 = env.get_driller_pose()
@@ -652,7 +693,7 @@ def main():
         ) 
         solve_grasp_ik = 0
         for obj_frame_grasp in valid_grasps:
-            for attempt_ik_solve in range(10): 
+            for _ in range(10): 
                 robot_frame_grasp = Grasp(
                     trans = est_rot @ obj_frame_grasp.trans + est_trans, # 这里不加 perturb_trans，因为在循环外面已经定义好了
                     rot   = est_rot @ obj_frame_grasp.rot,
@@ -669,18 +710,13 @@ def main():
                 break # 跳出 outer loop (obj_frame_grasp_candidate)
         
         if gra_plan is not None:
-            # print(f"choose grasp in the world is {choosed_grasp.trans}.")
-            succ = execute_plan(env,gra_plan=gra_plan,obj_pose=obj_pose,plan_type= 1)
-            print(f"Grasp driller from the desktop and lift task: {'succeeded' if succ else 'failed'}\n","*"*80)
-            if succ:
-                DISABLE_MOVE = False
-        else:
-            succ = False
-            env.close()
-            print("No plan found")
-            return 
+            # 这里不确定是否抓取成功
+            execute_plan(env,gra_plan=gra_plan,obj_pose=obj_pose,plan_type= 1)
+            DISABLE_MOVE = False
+
     # --------------------------------------step 4: plan to move and drop----------------------------------------------------
     if not DISABLE_GRASP and not DISABLE_MOVE:
+        print("*"*80)
         print("Stage 4: Move the object to a specific pose!")
         # implement your moving plan
         # current_gripper_trans, current_gripper_rot = env.humanoid_robot_model.fk_link(env.sim.mj_data.qpos[env.sim.qpos_humanoid_begin:env.sim.qpos_humanoid_begin+7], env.humanoid_robot_cfg.link_eef) # 正向运动学获取末端执行器位姿
@@ -729,6 +765,8 @@ def main():
     # --------------------------------------step 5: move quadruped backward to initial position------------------------------
     if not DISABLE_RETURN:
         # implement
+        print("*"*80)
+        print("Stage 5: Make the dog return to the initial position.")
         '''把轨迹倒放一遍，之后结合视觉微调'''
         backward_steps = 400 # customize by yourselves
         num_come_steps = len(quad_move_traj)
@@ -768,7 +806,7 @@ def main():
         final_rot = [0.,0.,0.,1.]
         final_rot = R.from_quat(final_rot).as_matrix()
 
-        rot_align = False
+
         for step in range(backward_steps): # 这里需要保证精确性
             obs_head = env.get_obs(camera_id=0) # head camera
             trans_marker_world, rot_marker_world = detect_marker_pose(
